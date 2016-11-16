@@ -15,8 +15,26 @@ const LOG = new (winston.Logger)({
     ]
 });
 
-function handleGetRequest(jsSchema, req, resp, next){
+function processQuery(p){
 
+
+}
+
+function handleGetRequest(jsSchema, req, resp, next, loadViews, name){
+  let view = req.query.view;
+  LOG.debug("To handle Get Request view=", view, loadViews, name);
+  loadView(loadViews, name).then(views =>{
+    let viewInfo = views[view];
+    let variables = viewInfo.varFn(req);
+    graphql(jsSchema, viewInfo.view, {}, null,
+      variables, null).then((result) =>{
+      LOG.log("Result is ", result);
+      resp.json(result).end();
+      next();
+    });
+  }).catch(err=>{
+    resp.end(err);
+  });
 };
 
 
@@ -30,6 +48,46 @@ function handlePostRequest(jsSchema, req, resp, next){
     next();
   });
 };
+const SchemaCache = {};
+const ViewCache = {};
+
+function loadView(loadViews, name){
+  return new Promise((resolve, reject)=>{
+    let view = ViewCache[name];
+    if(view){
+      resolve(view);
+    }else{
+      LOG.debug("To load view by", name, loadViews);
+      loadViews(name).then(v=>{
+        ViewCache[name]=v;
+        resolve(v);
+      }).catch(reject);
+    }
+  });
+};
+
+function getExecutableSchema(loadSchema, loadResolvers, name){
+  return new Promise((resolve, reject)=>{
+    let r = SchemaCache[name];
+    if(r){
+      resolve(r);
+    }else{
+      let schemaP = loadSchema(name);
+      let resolversP = loadResolvers(name);
+      Promise.all([schemaP, resolversP]).then((values)=>{
+        let [schema, resolvers] = values;
+        LOG.debug("Schema is ", schema);
+        LOG.debug("Resolvers is ", resolvers);
+        let s = makeExecutableSchema({
+          typeDefs: schema,
+          resolvers: resolvers
+        });
+        SchemaCache[name] = s;
+        resolve(s);
+      }).catch(reject);
+    }
+  });
+}
 
 const METHODS = {
   'GET': handleGetRequest,
@@ -40,6 +98,8 @@ export function handleQuery(options){
   const getName = options.getName
   const loadSchema = options.loadSchema;
   const loadResolvers = options.loadResolvers;
+  const loadViews = options.loadViews;
+
   return function(req, resp, next){
     let name = getName(req);
     LOG.info(`Name is ${name}`);
@@ -49,28 +109,13 @@ export function handleQuery(options){
       return;
     }
     //To load content
-    let schemaP = loadSchema(name);
-    let resolversP = loadResolvers(name);
-    Promise.all([schemaP, resolversP]).then((values)=>{
-      let [schema, resolvers] = values;
-      LOG.debug("Schema is ", schema);
-      LOG.debug("Resolvers is ", resolvers);
-      let jsSchema = makeExecutableSchema({
-        typeDefs: schema,
-        resolvers: resolvers
-      });
+    getExecutableSchema(loadSchema, loadResolvers, name).then((s)=>{
       let method = req.method;
-      METHODS[method](jsSchema, req, resp, next);
+      METHODS[method](s, req, resp, next, loadViews, name);
     }).catch((err)=>{
       LOG.error(`Schema for ${name} is not found`, err);
       resp.status(500).end();
       next();
     });
-    // schema.then((data)=>{
-    //   console.log("Schema is ", data)
-    // }).catch((err)=>{
-    //   console.error(`Schema for ${name} is not found`, err);
-    // });
-    // let resolvers = loadResolvers(name);
   }
 }

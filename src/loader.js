@@ -28,7 +28,7 @@ export function apiLoader(urlFn){
         }
       });
     });
-    LOG.debug("Promises", ps[0]);
+    // LOG.debug("Promises", ps[0]);
     return Promise.all(ps);
   });
 };
